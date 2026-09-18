@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import math
 import os
 import time
 import uuid
@@ -178,8 +179,33 @@ async def forward_episode(request, rollout_id: str, attempt_id: str, upstream_pa
                 raise ValueError("credential appeared in model output; raw payload not recorded")
             choices = response_body.get("choices", [])
             if len(choices) != 1:
-                raise HTTPException(502, "expected exactly one model completion")
-            ep["tokens"] += len(choices[0].get("token_ids") or [])
+                raise ValueError("expected exactly one model completion")
+            choice = choices[0]
+            ids = choice.get("token_ids")
+            prompt = response_body.get("prompt_token_ids")
+            probabilities = (choice.get("logprobs") or {}).get("content")
+            if (
+                not isinstance(ids, list)
+                or not ids
+                or not isinstance(prompt, list)
+                or not prompt
+                or any(type(token) is not int or token < 0 for token in ids + prompt)
+                or not isinstance(probabilities, list)
+                or len(probabilities) != len(ids)
+            ):
+                raise ValueError("missing or misaligned exact token IDs/log probabilities")
+            for token_id, probability in zip(ids, probabilities, strict=True):
+                value = probability.get("logprob")
+                if (
+                    probability.get("token") != f"token_id:{token_id}"
+                    or type(value) not in (int, float)
+                    or not math.isfinite(value)
+                    or value > 0.001
+                ):
+                    raise ValueError("invalid chosen-token log probability")
+            if len(ids) > prepared["max_tokens"]:
+                raise ValueError("upstream exceeded the output token budget")
+            ep["tokens"] += len(ids)
             emit(
                 "model_request",
                 {
