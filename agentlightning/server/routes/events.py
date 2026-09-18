@@ -8,7 +8,7 @@ import math
 import time
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.exceptions import HTTPException
 
 from agentlightning.schemas import DEFAULT_ATTEMPT_ID, Event, EventCreate
@@ -228,9 +228,14 @@ def _dedupe_model_requests_by_prompt_token_ids(events: list[Event]) -> list[Even
 
 
 @router.post("/rollouts/{rollout_id}/attempt/{attempt_id}/events", response_model=Event)
-async def post_event(rollout_id: str, body: EventCreate, attempt_id: str) -> Event:
+async def post_event(rollout_id: str, body: EventCreate, attempt_id: str, request: Request) -> Event:
     """Post an event for one rollout attempt."""
-    return record_event(rollout_id, attempt_id, body.event_type, body.data)
+    event = record_event(rollout_id, attempt_id, body.event_type, body.data)
+    if getattr(request.app.state, "strict_episodes", False):
+        from agentlightning.server.episode_proxy import journal
+
+        journal(request.app.state.episode_journal, rollout_id, event.model_dump(mode="json"))
+    return event
 
 
 @router.get("/rollouts/{rollout_id}/events", response_model=list[Event])

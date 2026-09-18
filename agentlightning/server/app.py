@@ -45,6 +45,22 @@ def _build_auth_dependency(key: str):
         if request.headers.get("x-api-key", "") == key:
             return
 
+        if getattr(request.app.state, "strict_episodes", False):
+            import hmac
+            import re
+
+            from agentlightning.server.episode_proxy import rollout_token
+
+            match = re.fullmatch(
+                r"/proxy/rollout/([^/]+)/attempt/([^/]+)/mode/(train|val)/openai/v1/(chat/completions|events)",
+                request.url.path,
+            )
+            if (
+                match
+                and auth_header.startswith("Bearer ")
+                and hmac.compare_digest(auth_header[7:], rollout_token(key, match[1], match[2]))
+            ):
+                return
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
     return verify_key
@@ -73,6 +89,11 @@ def create_app(config: Mapping[str, Any] | DictConfig | None = None) -> FastAPI:
             yield
 
     app = FastAPI(title="Agent Lightning", version="1.0.0", lifespan=lifespan)
+
+    app.state.strict_episodes = bool(server_config.get("strict_episodes", False))
+    app.state.episode_journal = server_config.get("episode_journal", "artifacts/gateway")
+    if app.state.strict_episodes and not key:
+        raise ValueError("strict episode mode requires a controller key")
 
     # Health check — no auth.
     @app.get("/healthz")

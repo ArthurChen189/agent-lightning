@@ -32,6 +32,12 @@ def _get_pause_state(request: Request) -> ProxyPauseState:
 )
 async def llm_proxy(rollout_id: str, attempt_id: str, mode: str, upstream_path: str, request: Request) -> Response:
     """LLM reverse proxy — forwards to model server, captures events."""
+    if getattr(request.app.state, "strict_episodes", False):
+        from agentlightning.server.episode_proxy import forward_episode
+
+        if mode not in {"train", "val"}:
+            raise HTTPException(404, "unsupported mode")
+        return await forward_episode(request, rollout_id, attempt_id, upstream_path, await request.json())
     if mode not in {"train", "val"}:
         raise HTTPException(status_code=404, detail=f"Unsupported proxy mode: {mode}")
     if upstream_path not in {"chat/completions", "completions"}:
